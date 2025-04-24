@@ -3,7 +3,6 @@
   "displayName": "GoVenstar",
   "type": "module",
   "version": "1.0.0",
-  "private": true,
   "description": "A Homebridge plugin for Venstar thermostats",
   "author": "Graham Otte",
   "license": "Apache-2.0",
@@ -25,8 +24,7 @@
   },
   "scripts": {
     "build": "rimraf ./dist && tsc",
-    "lint": "eslint . --max-warnings=0",
-    "prepublishOnly": "npm run lint && npm run build",
+    "prepublishOnly": "npm run build",
     "watch": "npm run build && npm link && nodemon"
   },
   "dependencies": {
