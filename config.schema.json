@@ -1,5 +1,5 @@
 {
-  "pluginAlias": "ExampleHomebridgePlugin",
+  "pluginAlias": "GoVenstar",
   "pluginType": "platform",
   "singular": true,
   "strictValidation": false,
