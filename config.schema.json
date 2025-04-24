@@ -3,15 +3,5 @@
   "pluginType": "platform",
   "singular": true,
   "strictValidation": false,
-  "schema": {
-    "type": "object",
-    "properties": {
-      "name": {
-        "title": "Name",
-        "type": "string",
-        "required": true,
-        "default": "Example Dynamic Platform"
-      }
-    }
-  }
+  "schema": {}
 }
