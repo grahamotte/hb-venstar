@@ -2,6 +2,5 @@
   "pluginAlias": "GoVenstar",
   "pluginType": "platform",
   "singular": true,
-  "strictValidation": false,
-  "schema": {}
+  "strictValidation": false
 }
