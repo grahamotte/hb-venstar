@@ -54,7 +54,6 @@ export class GoVenstarPlatform implements DynamicPlatformPlugin {
         const res = await axios.get(`http://${deviceIP}/query/info`, {
           timeout: 500,
         });
-        this.log.debug(res.data);
         if (Object.keys(res.data).includes("spacetemp")) {
           this.log.info(`found thermostat ${res.data.name} at ${deviceIP}`);
           devices[deviceIP] = {
@@ -66,7 +65,7 @@ export class GoVenstarPlatform implements DynamicPlatformPlugin {
       } catch (e) {}
     });
 
-    const discoveryTimeout = 5000;
+    const discoveryTimeout = 2000;
     await new Promise<void>((resolve, reject) => {
       const timeoutHandle = setTimeout(() => {
         ssdpClient.stop();
