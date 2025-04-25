@@ -41,7 +41,8 @@ export class GoVenstarPlatform implements DynamicPlatformPlugin {
 
   async discoverDevices() {
     this.log.info("discovering devices...");
-    let devices: { ip: string; name: string; uuid: string }[] = [];
+    let devices: { [key: string]: { ip: string; name: string; uuid: string } } =
+      {};
 
     const ssdpClient = new ssdp.Client();
     ssdpClient.removeAllListeners("response");
@@ -56,11 +57,11 @@ export class GoVenstarPlatform implements DynamicPlatformPlugin {
         this.log.debug(res.data);
         if (Object.keys(res.data).includes("spacetemp")) {
           this.log.info(`found thermostat ${res.data.name} at ${deviceIP}`);
-          devices.push({
+          devices[deviceIP] = {
             ip: deviceIP,
             name: res.data.name,
             uuid: this.api.hap.uuid.generate(deviceIP),
-          });
+          };
         }
       } catch (e) {}
     });
@@ -88,7 +89,7 @@ export class GoVenstarPlatform implements DynamicPlatformPlugin {
       ]);
     }
 
-    for (const device of devices) {
+    for (const device of Object.values(devices)) {
       this.log.info(`adding thermostat ${device.name}...`);
       const accessory = new this.api.platformAccessory(
         device.name,
