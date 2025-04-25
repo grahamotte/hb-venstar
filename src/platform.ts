@@ -8,7 +8,8 @@ import type {
   PlatformConfig,
   Service,
 } from "homebridge";
-import find from "local-devices";
+import ssdp from "node-ssdp";
+import { URL as url } from "node:url";
 import { PLATFORM_NAME, PLUGIN_NAME } from "./settings.js";
 import { Thermostat } from "./thermostat.js";
 
@@ -42,24 +43,43 @@ export class GoVenstarPlatform implements DynamicPlatformPlugin {
     this.log.info("discovering devices...");
     let devices: { ip: string; name: string; uuid: string }[] = [];
 
-    this.log.info(`scanning for thermostats...`);
-    for await (const device of await find()) {
+    const ssdpClient = new ssdp.Client();
+    ssdpClient.removeAllListeners("response");
+    ssdpClient.on("response", async (msg) => {
+      const urlParts = new url(msg.LOCATION || "");
+      const deviceIP = urlParts.hostname;
       try {
-        this.log.debug(`checking ${device.ip}...`);
-        const res = await axios.get(`http://${device.ip}/query/info`, {
+        this.log.debug(`checking ${deviceIP}...`);
+        const res = await axios.get(`http://${deviceIP}/query/info`, {
           timeout: 500,
         });
         this.log.debug(res.data);
         if (Object.keys(res.data).includes("spacetemp")) {
-          this.log.info(`found thermostat ${res.data.name} at ${device.ip}`);
+          this.log.info(`found thermostat ${res.data.name} at ${deviceIP}`);
           devices.push({
-            ip: device.ip,
+            ip: deviceIP,
             name: res.data.name,
-            uuid: this.api.hap.uuid.generate(device.ip),
+            uuid: this.api.hap.uuid.generate(deviceIP),
           });
         }
       } catch (e) {}
-    }
+    });
+
+    const discoveryTimeout = 5000;
+    await new Promise<void>((resolve, reject) => {
+      const timeoutHandle = setTimeout(() => {
+        ssdpClient.stop();
+        resolve();
+      }, discoveryTimeout);
+
+      try {
+        ssdpClient.search("venstar:thermostat:ecp");
+      } catch (err) {
+        clearTimeout(timeoutHandle);
+        ssdpClient.stop();
+        reject(err);
+      }
+    });
 
     for (const accessory of this.accessories.values()) {
       this.log.info(`remove thermostat ${accessory.displayName}...`);

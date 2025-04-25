@@ -2,7 +2,7 @@
   "name": "homebridge-go-venstar",
   "displayName": "GoVenstar",
   "type": "module",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "A Homebridge plugin for Venstar thermostats",
   "author": "Graham Otte",
   "license": "Apache-2.0",
@@ -28,9 +28,10 @@
     "watch": "npm run build && npm link && nodemon"
   },
   "dependencies": {
+    "@types/node-ssdp": "^4.0.4",
     "axios": "^1.8.4",
     "homebridge-lib": "^7.1.4",
-    "local-devices": "^4.0.0"
+    "node-ssdp": "^4.0.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.21.0",
