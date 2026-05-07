@@ -2,6 +2,14 @@
 description = "Run lint, tests, build, and package validation"
 run = "npm run validate"
 
+[tasks.publish]
+description = "Validate and publish the package to npm"
+run = '''
+set -euo pipefail
+npm run validate
+npm publish
+'''
+
 [tasks.push]
 description = "Force-push latest to Codeberg (origin) and GitHub (origin_backup)"
 run = '''
