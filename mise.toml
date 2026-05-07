@@ -1,3 +1,7 @@
+[tasks.test]
+description = "Run lint, tests, build, and package validation"
+run = "npm run validate"
+
 [tasks.push]
 description = "Force-push latest to Codeberg (origin) and GitHub (origin_backup)"
 run = '''

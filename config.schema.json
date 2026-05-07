@@ -2,5 +2,58 @@
   "pluginAlias": "GoVenstar",
   "pluginType": "platform",
   "singular": true,
-  "strictValidation": false
+  "strictValidation": true,
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Name",
+        "type": "string",
+        "default": "GoVenstar"
+      },
+      "discover": {
+        "title": "Discover thermostats with SSDP",
+        "type": "boolean",
+        "default": true
+      },
+      "hosts": {
+        "title": "Manual thermostat hosts",
+        "description": "Optional hostnames or IP addresses to query in addition to SSDP discovery.",
+        "type": "array",
+        "items": {
+          "type": "string",
+          "placeholder": "192.168.1.50"
+        },
+        "default": []
+      },
+      "discoveryTimeoutMs": {
+        "title": "Discovery timeout (milliseconds)",
+        "type": "integer",
+        "minimum": 1000,
+        "maximum": 30000,
+        "default": 5000
+      },
+      "requestTimeoutMs": {
+        "title": "Thermostat request timeout (milliseconds)",
+        "type": "integer",
+        "minimum": 500,
+        "maximum": 15000,
+        "default": 3000
+      },
+      "pollIntervalMs": {
+        "title": "Background refresh interval (milliseconds)",
+        "description": "Set to 0 to disable background polling.",
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 300000,
+        "default": 30000
+      },
+      "removeStaleAccessories": {
+        "title": "Remove undiscovered cached thermostats",
+        "description": "Leave disabled unless a thermostat has been permanently removed. Keeping stale accessories avoids HomeKit churn when a thermostat misses discovery.",
+        "type": "boolean",
+        "default": false
+      }
+    }
+  }
 }

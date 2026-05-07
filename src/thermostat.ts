@@ -1,48 +1,124 @@
-import type { CharacteristicValue, PlatformAccessory } from "homebridge";
-
-import axios from "axios";
+import type { CharacteristicValue, PlatformAccessory, Service } from "homebridge";
 import type { GoVenstarPlatform } from "./platform.js";
+import {
+  buildControlFromChange,
+  mapVenstarToHomeKit,
+  VenstarClient,
+  VenstarError,
+  VenstarMode,
+  type ThermostatChange,
+  type ThermostatValues,
+} from "./venstar.js";
 
-/**
- * Platform Accessory
- * An instance of this class is created for each accessory your platform registers
- * Each accessory may expose multiple services of different service types.
- */
+interface ThermostatDevice {
+  readonly id: string;
+  readonly host: string;
+  readonly name: string;
+}
+
+const CACHE_TTL_MS = 5000;
+const POST_SET_REFRESH_DELAY_MS = 250;
+
 export class Thermostat {
-  private platform;
-  private accessory;
-  private ip;
-  private name;
-  private service;
-  private fanService;
+  private readonly service: Service;
+  private readonly fanService: Service;
+  private readonly client: VenstarClient;
+  private values?: ThermostatValues;
+  private lastRefreshMs = 0;
+  private refreshPromise?: Promise<ThermostatValues>;
 
   constructor(
-    platform: GoVenstarPlatform,
-    accessory: PlatformAccessory,
-    ip: string,
-    name: string
+    private readonly platform: GoVenstarPlatform,
+    private readonly accessory: PlatformAccessory,
+    private readonly device: ThermostatDevice,
   ) {
-    this.platform = platform;
-    this.accessory = accessory;
-    this.ip = ip;
-    this.name = name;
-
+    this.client = new VenstarClient(device.host, platform.settings.requestTimeoutMs);
     this.service =
       this.accessory.getService(this.platform.Service.Thermostat) ||
       this.accessory.addService(this.platform.Service.Thermostat);
-
     this.fanService =
       this.accessory.getService(this.platform.Service.Fanv2) ||
       this.accessory.addService(this.platform.Service.Fanv2);
 
-    // characteristic bindings
+    this.setAccessoryInformation();
+    this.bindCharacteristics();
+    this.startPolling();
+    this.refresh().catch((error: unknown) => this.logRefreshFailure(error));
+  }
+
+  async getTemperatureDisplayUnits(): Promise<CharacteristicValue> {
+    return (await this.getValues()).temperatureDisplayUnits;
+  }
+
+  async getCurrentHeatingCoolingState(): Promise<CharacteristicValue> {
+    return (await this.getValues()).currentHeatingCoolingState;
+  }
+
+  async getTargetHeatingCoolingState(): Promise<CharacteristicValue> {
+    return (await this.getValues()).targetHeatingCoolingState;
+  }
+
+  async getCurrentTemperature(): Promise<CharacteristicValue> {
+    return (await this.getValues()).currentTemperature;
+  }
+
+  async getCoolingThresholdTemperature(): Promise<CharacteristicValue> {
+    return (await this.getValues()).coolingThresholdTemperature;
+  }
+
+  async getHeatingThresholdTemperature(): Promise<CharacteristicValue> {
+    return (await this.getValues()).heatingThresholdTemperature;
+  }
+
+  async getFanActive(): Promise<CharacteristicValue> {
+    return (await this.getValues()).fanActive;
+  }
+
+  async getTargetTemperature(): Promise<CharacteristicValue> {
+    return (await this.getValues()).targetTemperature;
+  }
+
+  async setTargetTemperature(value: CharacteristicValue): Promise<void> {
+    await this.set({ targetTemperature: Number(value) });
+  }
+
+  async setTargetHeatingCoolingState(value: CharacteristicValue): Promise<void> {
+    await this.set({ mode: Number(value) as VenstarMode });
+  }
+
+  async setCoolingThresholdTemperature(value: CharacteristicValue): Promise<void> {
+    await this.set({ coolTemperature: Number(value) });
+  }
+
+  async setHeatingThresholdTemperature(value: CharacteristicValue): Promise<void> {
+    await this.set({ heatTemperature: Number(value) });
+  }
+
+  async setFanActive(value: CharacteristicValue): Promise<void> {
+    await this.set({ fan: Number(value) });
+  }
+
+  private setAccessoryInformation(): void {
+    this.accessory
+      .getService(this.platform.Service.AccessoryInformation)
+      ?.setCharacteristic(this.platform.Characteristic.Manufacturer, "Venstar")
+      .setCharacteristic(this.platform.Characteristic.Model, "Thermostat")
+      .setCharacteristic(this.platform.Characteristic.SerialNumber, this.device.id)
+      .setCharacteristic(this.platform.Characteristic.Name, this.device.name);
+
+    this.service.setCharacteristic(this.platform.Characteristic.Name, this.device.name);
+    this.fanService.setCharacteristic(
+      this.platform.Characteristic.Name,
+      `${this.device.name} Fan`,
+    );
+  }
+
+  private bindCharacteristics(): void {
     this.service
       .getCharacteristic(this.platform.Characteristic.TemperatureDisplayUnits)
       .onGet(this.getTemperatureDisplayUnits.bind(this));
     this.service
-      .getCharacteristic(
-        this.platform.Characteristic.CurrentHeatingCoolingState
-      )
+      .getCharacteristic(this.platform.Characteristic.CurrentHeatingCoolingState)
       .onGet(this.getCurrentHeatingCoolingState.bind(this));
     this.service
       .getCharacteristic(this.platform.Characteristic.TargetHeatingCoolingState)
@@ -53,15 +129,11 @@ export class Thermostat {
       .onGet(this.getTargetTemperature.bind(this))
       .onSet(this.setTargetTemperature.bind(this));
     this.service
-      .getCharacteristic(
-        this.platform.Characteristic.CoolingThresholdTemperature
-      )
+      .getCharacteristic(this.platform.Characteristic.CoolingThresholdTemperature)
       .onGet(this.getCoolingThresholdTemperature.bind(this))
       .onSet(this.setCoolingThresholdTemperature.bind(this));
     this.service
-      .getCharacteristic(
-        this.platform.Characteristic.HeatingThresholdTemperature
-      )
+      .getCharacteristic(this.platform.Characteristic.HeatingThresholdTemperature)
       .onGet(this.getHeatingThresholdTemperature.bind(this))
       .onSet(this.setHeatingThresholdTemperature.bind(this));
     this.service
@@ -73,390 +145,122 @@ export class Thermostat {
       .onSet(this.setFanActive.bind(this));
   }
 
-  async get(overrides: Record<string, number> = {}) {
-    const ftoc = (value: number) =>
-      Math.round((((value - 32) * 5.0) / 9.0) * 100) / 100;
-    const ctof = (value: number) =>
-      Math.round(((value * 9.0) / 5.0 + 32) * 100) / 100;
-    const temp = (useF: boolean, temp: number) => (useF ? ftoc(temp) : temp);
-    const capRange = (value: number, min: number, max: number) => {
-      if (value <= min) return min;
-      if (value >= max) return max;
-      return value;
-    };
+  private startPolling(): void {
+    if (this.platform.settings.pollIntervalMs === 0) {
+      return;
+    }
 
-    return axios({
-      method: "get",
-      url: `http://${this.ip}/query/info`,
-    }).then((res) => {
-      const data = res.data as {
-        name: string;
-        mode: number;
-        state: number;
-        fan: number;
-        fanstate: number;
-        tempunits: number;
-        schedule: number;
-        schedulepart: number;
-        away: number;
-        spacetemp: number;
-        heattemp: number;
-        cooltemp: number;
-        cooltempmin: number;
-        cooltempmax: number;
-        heattempmin: number;
-        heattempmax: number;
-        activestage: number;
-        setpointdelta: number;
-        availablemodes: number;
-      };
-      const mode =
-        overrides["mode"] === undefined ? data.mode : overrides["mode"]; // 0 == off, 1 == heat, 2 == cool, 3 == auto
-      const useF = data.tempunits === 0 ? true : false; // 0 == F, 1 == C ! opposite of homebridge !
-      const currTemp = temp(useF, data["spacetemp"]);
-      const coolTemp = temp(useF, overrides["coolTemp"] || data["cooltemp"]);
-      const heatTemp = temp(useF, overrides["heatTemp"] || data["heattemp"]);
-      let targetTemp = currTemp;
-      if (mode === 0) {
-        targetTemp = currTemp;
-      } else if (mode === 1) {
-        targetTemp = heatTemp;
-      } else if (mode === 2) {
-        targetTemp = coolTemp;
-      } else if (mode === 3) {
-        targetTemp = Math.round(coolTemp + (heatTemp - coolTemp) / 2);
-      }
+    const timer = setInterval(() => {
+      this.refresh().catch((error: unknown) => this.logRefreshFailure(error));
+    }, this.platform.settings.pollIntervalMs);
 
-      const values = {
-        mode: mode,
-        useF: useF,
-        currTemp: currTemp,
-        currTempF: ctof(currTemp),
-        heatTemp: heatTemp,
-        heatTempF: ctof(heatTemp),
-        coolTemp: coolTemp,
-        coolTempF: ctof(coolTemp),
-        targetTemp: targetTemp,
-        targetTempF: ctof(targetTemp),
-        fan: data.fan,
-        tempUnits: useF ? 1 : 0, // 1 == F, 0 == C ! opposite of venstar !
-        coolThresh: capRange(coolTemp, 10, 35),
-        heatThresh: capRange(heatTemp, 0, 25),
-      };
+    timer.unref?.();
+  }
 
+  private async getValues(): Promise<ThermostatValues> {
+    if (this.values && Date.now() - this.lastRefreshMs < CACHE_TTL_MS) {
+      return this.values;
+    }
+
+    return this.refresh();
+  }
+
+  private async refresh(): Promise<ThermostatValues> {
+    if (this.refreshPromise) {
+      return this.refreshPromise;
+    }
+
+    this.refreshPromise = this.client
+      .getInfo()
+      .then((info) => {
+        const values = mapVenstarToHomeKit(info);
+        this.values = values;
+        this.lastRefreshMs = Date.now();
+        this.updateCharacteristics(values);
+        return values;
+      })
+      .catch((error: unknown) => {
+        if (this.values) {
+          this.logRefreshFailure(error);
+          return this.values;
+        }
+
+        throw this.toHapCommunicationError(error);
+      })
+      .finally(() => {
+        this.refreshPromise = undefined;
+      });
+
+    return this.refreshPromise;
+  }
+
+  private async set(change: ThermostatChange): Promise<void> {
+    try {
+      const current = await this.getValues();
+      const control = buildControlFromChange(current, change);
       this.platform.log.debug(
-        "get:",
-        Object.keys(values)
-          .map((k) => `${k}: ${(values as any)[k]}`)
-          .join("; ")
+        `${this.device.name}: setting mode=${control.mode}; fan=${control.fan}; heat=${control.heattemp}; cool=${control.cooltemp}`,
       );
 
-      this.service
-        .getCharacteristic(
-          this.platform.Characteristic.CurrentHeatingCoolingState
-        )
-        .updateValue(values.mode);
-      this.service
-        .getCharacteristic(
-          this.platform.Characteristic.TargetHeatingCoolingState
-        )
-        .updateValue(values.mode);
-      this.service
-        .getCharacteristic(this.platform.Characteristic.TemperatureDisplayUnits)
-        .updateValue(values.tempUnits);
-      this.service
-        .getCharacteristic(this.platform.Characteristic.TargetTemperature)
-        .updateValue(values.targetTemp);
-      this.service
-        .getCharacteristic(
-          this.platform.Characteristic.CoolingThresholdTemperature
-        )
-        .updateValue(values.coolThresh);
-      this.service
-        .getCharacteristic(
-          this.platform.Characteristic.HeatingThresholdTemperature
-        )
-        .updateValue(values.heatThresh);
-      this.service
-        .getCharacteristic(this.platform.Characteristic.CurrentTemperature)
-        .updateValue(values.currTemp);
-      this.fanService
-        .getCharacteristic(this.platform.Characteristic.Active)
-        .updateValue(values.fan);
-
-      return values;
-    });
-  }
-
-  async set(change: Record<string, number>) {
-    const ctof = (value: number) =>
-      Math.round(((value * 9.0) / 5.0 + 32) * 100) / 100;
-    const temp = (useF: boolean, temp: number) => (useF ? ctof(temp) : temp);
-    const g = await this.get();
-    const mode = change.mode === undefined ? g.mode : change.mode;
-    const fan = change.fan === undefined ? g.fan : change.fan;
-
-    if (change.targetTemp) {
-      if (g.mode === 1) {
-        change["heatTemp"] = change.targetTemp;
-      } else if (g.mode === 2) {
-        change["coolTemp"] = change.targetTemp;
-      } else {
-        change["coolTemp"] = change.targetTemp;
-        change["heatTemp"] = change.targetTemp;
-      }
-    }
-
-    const heatTemp = temp(g.useF, change.heatTemp || g.heatTemp);
-    const coolTemp = temp(g.useF, change.coolTemp || g.coolTemp);
-    const values = {
-      mode: mode,
-      fan: fan,
-      heatTemp: heatTemp,
-      coolTemp: coolTemp,
-    };
-
-    this.platform.log.debug(
-      `set:`,
-      Object.keys(values)
-        .map((k) => `${k}: ${(values as any)[k]}`)
-        .join("; ")
-    );
-
-    const res = await axios({
-      method: "post",
-      url: `http://${this.ip}/control?${[
-        `mode=${values.mode}`,
-        `fan=${values.fan}`,
-        `heattemp=${values.heatTemp}`,
-        `cooltemp=${values.coolTemp}`,
-      ].join("&")}`,
-    });
-
-    if (res.data.error) {
-      this.platform.log.error(res.data);
-    } else {
-      await setTimeout(() => this.get(values), 100);
+      await this.client.setControl(control);
+      await delay(POST_SET_REFRESH_DELAY_MS);
+      await this.refresh();
+    } catch (error) {
+      throw this.toHapCommunicationError(error);
     }
   }
 
-  // getters
-
-  async getTemperatureDisplayUnits() {
-    return await this.get().then((x) => x.tempUnits);
+  private updateCharacteristics(values: ThermostatValues): void {
+    this.service
+      .getCharacteristic(this.platform.Characteristic.CurrentHeatingCoolingState)
+      .updateValue(values.currentHeatingCoolingState);
+    this.service
+      .getCharacteristic(this.platform.Characteristic.TargetHeatingCoolingState)
+      .updateValue(values.targetHeatingCoolingState);
+    this.service
+      .getCharacteristic(this.platform.Characteristic.TemperatureDisplayUnits)
+      .updateValue(values.temperatureDisplayUnits);
+    this.service
+      .getCharacteristic(this.platform.Characteristic.TargetTemperature)
+      .updateValue(values.targetTemperature);
+    this.service
+      .getCharacteristic(this.platform.Characteristic.CoolingThresholdTemperature)
+      .updateValue(values.coolingThresholdTemperature);
+    this.service
+      .getCharacteristic(this.platform.Characteristic.HeatingThresholdTemperature)
+      .updateValue(values.heatingThresholdTemperature);
+    this.service
+      .getCharacteristic(this.platform.Characteristic.CurrentTemperature)
+      .updateValue(values.currentTemperature);
+    this.fanService
+      .getCharacteristic(this.platform.Characteristic.Active)
+      .updateValue(values.fanActive);
   }
 
-  async getCurrentHeatingCoolingState() {
-    return await this.get().then((x) => x.mode);
+  private logRefreshFailure(error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    this.platform.log.warn(`${this.device.name}: ${message}`);
   }
 
-  async getTargetHeatingCoolingState() {
-    return await this.get().then((x) => x.mode);
-  }
+  private toHapCommunicationError(error: unknown): Error {
+    this.logRefreshFailure(error);
 
-  async getCurrentTemperature() {
-    return await this.get().then((x) => x.currTemp);
-  }
+    if (error instanceof VenstarError) {
+      return new this.platform.api.hap.HapStatusError(
+        this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE,
+      );
+    }
 
-  async getCoolingThresholdTemperature() {
-    return await this.get().then((x) => x.coolThresh);
-  }
+    if (error instanceof Error) {
+      return error;
+    }
 
-  async getHeatingThresholdTemperature() {
-    return await this.get().then((x) => x.heatThresh);
-  }
-
-  async getFanActive() {
-    return await this.get().then((x) => x.fan);
-  }
-
-  async getTargetTemperature() {
-    return await this.get().then((x) => x.targetTemp);
-  }
-
-  // setters
-
-  async setTargetTemperature(value: CharacteristicValue) {
-    return await this.set({ targetTemp: Number(value) });
-  }
-
-  async setTargetHeatingCoolingState(value: CharacteristicValue) {
-    return await this.set({ mode: Number(value) });
-  }
-
-  async setCoolingThresholdTemperature(value: CharacteristicValue) {
-    return await this.set({ coolTemp: Number(value) });
-  }
-
-  async setHeatingThresholdTemperature(value: CharacteristicValue) {
-    return await this.set({ heatTemp: Number(value) });
-  }
-
-  async setFanActive(value: CharacteristicValue) {
-    return await this.set({ fan: Number(value) });
+    return new Error(String(error));
   }
 }
-//   // set accessory information
-//   this.accessory
-//     .getService(this.platform.Service.AccessoryInformation)!
-//     .setCharacteristic(
-//       this.platform.Characteristic.Manufacturer,
-//       "Default-Manufacturer"
-//     )
-//     .setCharacteristic(this.platform.Characteristic.Model, "Default-Model")
-//     .setCharacteristic(
-//       this.platform.Characteristic.SerialNumber,
-//       "Default-Serial"
-//     );
 
-//   // get the LightBulb service if it exists, otherwise create a new LightBulb service
-//   // you can create multiple services for each accessory
-
-//   if (accessory.context.device.CustomService) {
-//     // This is only required when using Custom Services and Characteristics not support by HomeKit
-//     this.service =
-//       this.accessory.getService(
-//         this.platform.CustomServices[accessory.context.device.CustomService]
-//       ) ||
-//       this.accessory.addService(
-//         this.platform.CustomServices[accessory.context.device.CustomService]
-//       );
-//   } else {
-//     this.service =
-//       this.accessory.getService(this.platform.Service.Lightbulb) ||
-//       this.accessory.addService(this.platform.Service.Lightbulb);
-//   }
-
-//   // set the service name, this is what is displayed as the default name on the Home app
-//   // in this example we are using the name we stored in the `accessory.context` in the `discoverDevices` method.
-//   this.service.setCharacteristic(
-//     this.platform.Characteristic.Name,
-//     accessory.context.device.exampleDisplayName
-//   );
-
-//   // each service must implement at-minimum the "required characteristics" for the given service type
-//   // see https://developers.homebridge.io/#/service/Lightbulb
-
-//   // register handlers for the On/Off Characteristic
-//   this.service
-//     .getCharacteristic(this.platform.Characteristic.On)
-//     .onSet(this.setOn.bind(this)) // SET - bind to the `setOn` method below
-//     .onGet(this.getOn.bind(this)); // GET - bind to the `getOn` method below
-
-//   // register handlers for the Brightness Characteristic
-//   this.service
-//     .getCharacteristic(this.platform.Characteristic.Brightness)
-//     .onSet(this.setBrightness.bind(this)); // SET - bind to the `setBrightness` method below
-
-//   /**
-//    * Creating multiple services of the same type.
-//    *
-//    * To avoid "Cannot add a Service with the same UUID another Service without also defining a unique 'subtype' property." error,
-//    * when creating multiple services of the same type, you need to use the following syntax to specify a name and subtype id:
-//    * this.accessory.getService('NAME') || this.accessory.addService(this.platform.Service.Lightbulb, 'NAME', 'USER_DEFINED_SUBTYPE_ID');
-//    *
-//    * The USER_DEFINED_SUBTYPE must be unique to the platform accessory (if you platform exposes multiple accessories, each accessory
-//    * can use the same subtype id.)
-//    */
-
-//   // Example: add two "motion sensor" services to the accessory
-//   const motionSensorOneService =
-//     this.accessory.getService("Motion Sensor One Name") ||
-//     this.accessory.addService(
-//       this.platform.Service.MotionSensor,
-//       "Motion Sensor One Name",
-//       "YourUniqueIdentifier-1"
-//     );
-
-//   const motionSensorTwoService =
-//     this.accessory.getService("Motion Sensor Two Name") ||
-//     this.accessory.addService(
-//       this.platform.Service.MotionSensor,
-//       "Motion Sensor Two Name",
-//       "YourUniqueIdentifier-2"
-//     );
-
-//   /**
-//    * Updating characteristics values asynchronously.
-//    *
-//    * Example showing how to update the state of a Characteristic asynchronously instead
-//    * of using the `on('get')` handlers.
-//    * Here we change update the motion sensor trigger states on and off every 10 seconds
-//    * the `updateCharacteristic` method.
-//    *
-//    */
-//   let motionDetected = false;
-//   setInterval(() => {
-//     // EXAMPLE - inverse the trigger
-//     motionDetected = !motionDetected;
-
-//     // push the new value to HomeKit
-//     motionSensorOneService.updateCharacteristic(
-//       this.platform.Characteristic.MotionDetected,
-//       motionDetected
-//     );
-//     motionSensorTwoService.updateCharacteristic(
-//       this.platform.Characteristic.MotionDetected,
-//       !motionDetected
-//     );
-
-//     this.platform.log.debug(
-//       "Triggering motionSensorOneService:",
-//       motionDetected
-//     );
-//     this.platform.log.debug(
-//       "Triggering motionSensorTwoService:",
-//       !motionDetected
-//     );
-//   }, 10000);
-// }
-
-// /**
-//  * Handle "SET" requests from HomeKit
-//  * These are sent when the user changes the state of an accessory, for example, turning on a Light bulb.
-//  */
-// async setOn(value: CharacteristicValue) {
-//   // implement your own code to turn your device on/off
-//   this.exampleStates.On = value as boolean;
-
-//   this.platform.log.debug("Set Characteristic On ->", value);
-// }
-
-// /**
-//  * Handle the "GET" requests from HomeKit
-//  * These are sent when HomeKit wants to know the current state of the accessory, for example, checking if a Light bulb is on.
-//  *
-//  * GET requests should return as fast as possible. A long delay here will result in
-//  * HomeKit being unresponsive and a bad user experience in general.
-//  *
-//  * If your device takes time to respond you should update the status of your device
-//  * asynchronously instead using the `updateCharacteristic` method instead.
-//  * In this case, you may decide not to implement `onGet` handlers, which may speed up
-//  * the responsiveness of your device in the Home app.
-
-//  * @example
-//  * this.service.updateCharacteristic(this.platform.Characteristic.On, true)
-//  */
-// async getOn(): Promise<CharacteristicValue> {
-//   // implement your own code to check if the device is on
-//   const isOn = this.exampleStates.On;
-
-//   this.platform.log.debug("Get Characteristic On ->", isOn);
-
-//   // if you need to return an error to show the device as "Not Responding" in the Home app:
-//   // throw new this.platform.api.hap.HapStatusError(this.platform.api.hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
-
-//   return isOn;
-// }
-
-// /**
-//  * Handle "SET" requests from HomeKit
-//  * These are sent when the user changes the state of an accessory, for example, changing the Brightness
-//  */
-// async setBrightness(value: CharacteristicValue) {
-//   // implement your own code to set the brightness
-//   this.exampleStates.Brightness = value as number;
-
-//   this.platform.log.debug("Set Characteristic Brightness -> ", value);
-// }
-// }
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
