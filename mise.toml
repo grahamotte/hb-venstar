@@ -1,0 +1,14 @@
+[tasks.push]
+description = "Force-push latest to Codeberg (origin) and GitHub (origin_backup)"
+run = '''
+set -euo pipefail
+push_to() {
+  local remote="$1"
+  local repo="$2"
+  git remote remove "$remote" 2>/dev/null || true
+  git remote add "$remote" "$repo"
+  git push -f "$remote" latest
+}
+push_to origin "ssh://git@codeberg.org/grahamotte/homebridge-go-venstar.git"
+push_to origin_backup "git@github.com:grahamotte/homebridge-go-venstar.git"
+'''
