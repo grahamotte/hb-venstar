@@ -46,6 +46,18 @@ describe("Venstar mapping", () => {
     assert.equal(values.currentHeatingCoolingState, 0);
   });
 
+  it("uses Venstar fan setting, not current blower state, for fan active", () => {
+    const values = mapVenstarToHomeKit(
+      parseVenstarInfo({
+        ...fahrenheitInfo,
+        fan: 0,
+        fanstate: 1,
+      }),
+    );
+
+    assert.equal(values.fanActive, 0);
+  });
+
   it("preserves an auto-mode deadband when changing target temperature", () => {
     const current = mapVenstarToHomeKit(
       parseVenstarInfo({

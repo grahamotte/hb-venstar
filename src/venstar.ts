@@ -185,7 +185,7 @@ export function mapVenstarToHomeKit(info: VenstarInfo): ThermostatValues {
     targetHeatingCoolingState: targetStateForVenstarMode(info.mode),
     heatingThresholdTemperature: clamp(heatTemperature, 0, 25),
     coolingThresholdTemperature: clamp(coolTemperature, 10, 35),
-    fanActive: info.fanstate === 0 ? 0 : 1,
+    fanActive: info.fan === 0 ? 0 : 1,
   };
 }
 

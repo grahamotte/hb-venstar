@@ -9,7 +9,7 @@ Homebridge plugin for local Venstar thermostats using the
 - Supports optional manual IP/hostname entries for thermostats that miss discovery.
 - Keeps cached HomeKit accessories when a thermostat is temporarily offline.
 - Uses request timeouts, state caching, and background polling to avoid slow HomeKit reads.
-- Exposes thermostat mode, current temperature, target temperature, heat/cool thresholds, display units, and fan active state.
+- Exposes thermostat mode, current temperature, target temperature, heat/cool thresholds, display units, and fan setting.
 
 ## Requirements
 

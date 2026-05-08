@@ -2,7 +2,7 @@
   "name": "homebridge-go-venstar",
   "displayName": "GoVenstar",
   "type": "module",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "A Homebridge plugin for Venstar thermostats",
   "author": "Graham Otte",
   "license": "Apache-2.0",
