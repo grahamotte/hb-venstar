@@ -2,16 +2,30 @@
 description = "Run lint, tests, build, and package validation"
 run = "npm run validate"
 
+[tasks.check-clean]
+description = "Fail if the git working tree has uncommitted files"
+run = '''
+set -euo pipefail
+if [ -n "$(git status --porcelain)" ]; then
+  echo "Refusing to continue with uncommitted files:" >&2
+  git status --short >&2
+  exit 1
+fi
+'''
+
 [tasks.publish]
-description = "Validate and publish the package to npm"
+description = "Push, validate, and publish the package to npm"
+depends = ["push"]
 run = '''
 set -euo pipefail
 npm run validate
+mise run check-clean
 npm publish
 '''
 
 [tasks.push]
 description = "Force-push latest to Codeberg (origin) and GitHub (origin_backup)"
+depends = ["check-clean"]
 run = '''
 set -euo pipefail
 push_to() {
