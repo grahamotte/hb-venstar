@@ -1,5 +1,6 @@
 import type { CharacteristicValue, PlatformAccessory, Service } from "homebridge";
 import type { GoVenstarPlatform } from "./platform.js";
+import { homeKitSerialNumber } from "./serial.js";
 import {
   buildControlFromChange,
   mapVenstarToHomeKit,
@@ -14,6 +15,8 @@ interface ThermostatDevice {
   readonly id: string;
   readonly host: string;
   readonly name: string;
+  readonly serialNumber?: string;
+  readonly usn?: string;
 }
 
 const CACHE_TTL_MS = 5000;
@@ -103,7 +106,10 @@ export class Thermostat {
       .getService(this.platform.Service.AccessoryInformation)
       ?.setCharacteristic(this.platform.Characteristic.Manufacturer, "Venstar")
       .setCharacteristic(this.platform.Characteristic.Model, "Thermostat")
-      .setCharacteristic(this.platform.Characteristic.SerialNumber, this.device.id)
+      .setCharacteristic(
+        this.platform.Characteristic.SerialNumber,
+        this.device.serialNumber ?? homeKitSerialNumber(this.device.id, this.device.usn),
+      )
       .setCharacteristic(this.platform.Characteristic.Name, this.device.name);
 
     this.service.setCharacteristic(this.platform.Characteristic.Name, this.device.name);

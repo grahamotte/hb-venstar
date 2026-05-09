@@ -9,6 +9,7 @@ import type {
 } from "homebridge";
 import { normalizeHost, parseConfig, type GoVenstarConfig } from "./config.js";
 import { PLATFORM_NAME, PLUGIN_NAME } from "./settings.js";
+import { homeKitSerialNumber } from "./serial.js";
 import { discoverSsdpDevices } from "./ssdp.js";
 import { Thermostat } from "./thermostat.js";
 import { VenstarClient } from "./venstar.js";
@@ -17,6 +18,7 @@ interface DiscoveredDevice {
   readonly id: string;
   readonly host: string;
   readonly name: string;
+  readonly serialNumber: string;
   readonly usn?: string;
 }
 
@@ -130,6 +132,7 @@ export class GoVenstarPlatform implements DynamicPlatformPlugin {
       id: fallbackId,
       host: normalizedHost,
       name: info.name,
+      serialNumber: homeKitSerialNumber(fallbackId, usn),
       usn,
     };
   }
